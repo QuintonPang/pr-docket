@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#392f26" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#756858"/>
+    </marker>
+    <style>
+      .title { font: 700 48px Georgia, serif; fill: #302b27; }
+      .subtitle { font: 500 19px Arial, sans-serif; fill: #756858; letter-spacing: 2px; }
+      .label { font: 700 23px Arial, sans-serif; fill: #302b27; }
+      .small { font: 500 17px Arial, sans-serif; fill: #756858; }
+      .tiny { font: 600 15px Arial, sans-serif; fill: #756858; letter-spacing: 1px; }
+      .line { fill: none; stroke: #756858; stroke-width: 4; marker-end: url(#arrow); }
+      .dash { fill: none; stroke: #b9852e; stroke-width: 4; stroke-dasharray: 10 9; marker-end: url(#arrow); }
+      .box { stroke-width: 3; rx: 18; filter: url(#shadow); }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1200" fill="#f4efe3"/>
+  <path d="M90 115 H1710" stroke="#6d604f" stroke-width="2"/>
+  <text x="90" y="76" class="title">PR Docket — System Architecture</text>
+  <text x="1710" y="75" text-anchor="end" class="subtitle">MULTI-AGENT CODE REVIEW</text>
+
+  <!-- Inputs -->
+  <text x="95" y="185" class="tiny">REVIEW INPUTS</text>
+  <rect class="box" x="90" y="215" width="290" height="120" fill="#fffaf0" stroke="#a99d8c"/>
+  <text x="235" y="264" text-anchor="middle" class="label">Pasted Git Diff</text>
+  <text x="235" y="297" text-anchor="middle" class="small">Quick review mode</text>
+  <rect class="box" x="90" y="380" width="290" height="120" fill="#fffaf0" stroke="#a99d8c"/>
+  <text x="235" y="429" text-anchor="middle" class="label">GitLab MR URL</text>
+  <text x="235" y="462" text-anchor="middle" class="small">Full merge request</text>
+
+  <!-- Client and server -->
+  <rect class="box" x="470" y="275" width="300" height="150" fill="#e9e0cf" stroke="#776a59"/>
+  <text x="620" y="325" text-anchor="middle" class="label">React + Vite</text>
+  <text x="620" y="360" text-anchor="middle" class="small">Review interface</text>
+  <text x="620" y="391" text-anchor="middle" class="small">Results dashboard</text>
+
+  <rect class="box" x="875" y="275" width="310" height="150" fill="#eadcb9" stroke="#b9852e"/>
+  <text x="1030" y="325" text-anchor="middle" class="label">Express API</text>
+  <text x="1030" y="360" text-anchor="middle" class="small">POST /api/review</text>
+  <text x="1030" y="391" text-anchor="middle" class="small">POST /api/review-mr</text>
+
+  <rect class="box" x="1320" y="215" width="350" height="120" fill="#f4ded4" stroke="#c96857"/>
+  <text x="1495" y="264" text-anchor="middle" class="label">GitLab API</text>
+  <text x="1495" y="297" text-anchor="middle" class="small">Fetch changed file diffs</text>
+
+  <rect class="box" x="1320" y="380" width="350" height="120" fill="#efe7d4" stroke="#9d8050"/>
+  <text x="1495" y="429" text-anchor="middle" class="label">Diff Batching</text>
+  <text x="1495" y="462" text-anchor="middle" class="small">Bounded context per batch</text>
+
+  <!-- Connections top -->
+  <path class="line" d="M380 275 H470"/>
+  <path class="line" d="M380 440 H425 Q445 440 445 415 V375 Q445 350 470 350"/>
+  <path class="line" d="M770 350 H875"/>
+  <path class="line" d="M1185 320 H1270 Q1290 320 1290 275 H1320"/>
+  <path class="line" d="M1495 335 V380"/>
+  <path class="line" d="M1320 440 H1245 Q1215 440 1215 410 V385 Q1215 350 1185 350"/>
+
+  <!-- Pipeline panel -->
+  <rect x="90" y="585" width="1580" height="470" rx="28" fill="#fffaf0" stroke="#b9ad9a" stroke-width="3"/>
+  <text x="130" y="640" class="tiny">PARALLEL REVIEW PIPELINE</text>
+
+  <rect class="box" x="135" y="705" width="310" height="145" fill="#f4ded8" stroke="#c96857"/>
+  <circle cx="180" cy="750" r="22" fill="#c96857"/>
+  <text x="180" y="758" text-anchor="middle" font-family="Georgia" font-size="25" fill="white">§</text>
+  <text x="220" y="750" class="label">Security Counsel</text>
+  <text x="180" y="799" class="small">Injection · auth · secrets</text>
+
+  <rect class="box" x="510" y="705" width="310" height="145" fill="#dceae7" stroke="#3f8f87"/>
+  <circle cx="555" cy="750" r="22" fill="#3f8f87"/>
+  <text x="555" y="758" text-anchor="middle" font-family="Georgia" font-size="25" fill="white">⌁</text>
+  <text x="595" y="750" class="label">Performance Counsel</text>
+  <text x="555" y="799" class="small">N+1 · caching · algorithms</text>
+
+  <rect class="box" x="885" y="705" width="310" height="145" fill="#e6e0ed" stroke="#776a91"/>
+  <circle cx="930" cy="750" r="22" fill="#776a91"/>
+  <text x="930" y="758" text-anchor="middle" font-family="Georgia" font-size="25" fill="white">¶</text>
+  <text x="970" y="750" class="label">Readability Counsel</text>
+  <text x="930" y="799" class="small">Naming · tests · complexity</text>
+
+  <rect class="box" x="1300" y="705" width="310" height="145" fill="#eadcb9" stroke="#b9852e"/>
+  <circle cx="1345" cy="750" r="22" fill="#b9852e"/>
+  <text x="1345" y="758" text-anchor="middle" font-family="Georgia" font-size="23" fill="white">⚖</text>
+  <text x="1385" y="750" class="label">Judge Agent</text>
+  <text x="1345" y="799" class="small">Synthesizes final verdict</text>
+
+  <!-- The Express orchestrator fans one batch out to all three specialists. -->
+  <path d="M1030 425 V665 H290" fill="none" stroke="#756858" stroke-width="4"/>
+  <path d="M290 665 H1040" fill="none" stroke="#756858" stroke-width="4"/>
+  <path class="line" d="M290 665 V705"/>
+  <path class="line" d="M665 665 V705"/>
+  <path class="line" d="M1040 665 V705"/>
+
+  <!-- The three specialist opinions converge before entering the judge. -->
+  <path d="M290 850 V875 H1240" fill="none" stroke="#756858" stroke-width="4"/>
+  <path d="M665 850 V875" fill="none" stroke="#756858" stroke-width="4"/>
+  <path d="M1040 850 V875" fill="none" stroke="#756858" stroke-width="4"/>
+  <path class="line" d="M1240 875 H1260 Q1280 875 1280 845 V805 H1300"/>
+
+  <!-- Cloud service -->
+  <rect class="box" x="410" y="915" width="860" height="95" fill="#fff1d8" stroke="#e5962d"/>
+  <text x="840" y="957" text-anchor="middle" class="label">Alibaba Cloud Model Studio · Qwen API</text>
+  <text x="840" y="988" text-anchor="middle" class="small">OpenAI-compatible endpoint · structured JSON responses · retry and fallback handling</text>
+  <path class="dash" d="M290 850 V880 Q290 895 320 895 H540 Q555 895 555 915"/>
+  <path class="dash" d="M665 850 V915"/>
+  <path class="dash" d="M1040 850 V880 Q1040 895 1020 895 H965 Q950 895 950 915"/>
+  <path class="dash" d="M1455 850 V890 Q1455 930 1270 950"/>
+
+  <!-- Response loop -->
+  <path d="M1455 705 V625 Q1455 555 1365 555 H670 Q620 555 620 425" fill="none" stroke="#b9852e" stroke-width="5" marker-end="url(#arrow)"/>
+  <rect x="1005" y="526" width="325" height="55" rx="27" fill="#f4efe3" stroke="#b9852e" stroke-width="2"/>
+  <text x="1168" y="561" text-anchor="middle" class="small">Structured verdict returned to UI</text>
+
+  <text x="90" y="1135" class="tiny">STATELESS REQUEST / RESPONSE ARCHITECTURE</text>
+  <text x="1710" y="1135" text-anchor="end" class="small">Three specialists per batch → one final judgment</text>
+</svg>

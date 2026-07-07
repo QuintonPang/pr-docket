@@ -6,8 +6,19 @@ import { createQwenClient, reviewDiffFiles, runJudge, runReviewers } from "./rev
 
 const app = express();
 const port = process.env.PORT || 3001;
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
-app.use(cors({ origin: "http://localhost:5173" }));
+app.disable("x-powered-by");
+app.use(cors({
+  origin(origin, callback) {
+    // Requests without an Origin header include health checks and server-to-server calls.
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("Origin is not allowed by CORS."));
+  },
+}));
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/health", (_request, response) => {
@@ -38,7 +49,7 @@ app.post("/api/review-mr", async (request, response) => {
   const { url } = request.body ?? {};
   if (typeof url !== "string" || !url.trim()) {
     return response.status(400).json({ error: "A GitLab merge request URL is required." });
-  }wh
+  }
   if (!process.env.QWEN_API_KEY) {
     return response.status(503).json({ error: "QWEN_API_KEY is not configured on the server." });
   }
@@ -59,6 +70,6 @@ app.post("/api/review-mr", async (request, response) => {
   }
 });
 
-app.listen(port, () => {
+app.listen(port, "0.0.0.0", () => {
   console.log(`PR Docket server listening on http://localhost:${port}`);
 });

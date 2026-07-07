@@ -46,3 +46,7 @@ The server uses GitLab's supported `GET /projects/:id/merge_requests/:iid/diffs`
 ## Scope
 
 This hackathon version keeps no database, user accounts, or webhook automation. In production, a GitLab webhook could trigger the same merge-request review pipeline when an MR is opened or synchronized.
+
+## Alibaba Cloud deployment
+
+The backend is packaged for Alibaba Cloud ECS in `server/Dockerfile`. Follow the step-by-step [Alibaba ECS deployment runbook](deploy/alibaba-ecs.md). The container reads Qwen and GitLab credentials only from environment variables and exposes the `/health` endpoint for deployment proof.
