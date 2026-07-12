@@ -31,6 +31,14 @@ app.use(cors({
   },
 }));
 app.use(express.json({ limit: "2mb" }));
+app.use((request, response, next) => {
+  const startedAt = Date.now();
+  console.log(`[request] ${request.method} ${request.originalUrl}`);
+  response.on("finish", () => {
+    console.log(`[response] ${request.method} ${request.originalUrl} ${response.statusCode} ${Date.now() - startedAt}ms`);
+  });
+  next();
+});
 
 app.get("/health", (_request, response) => {
   response.json({ status: "ok" });
@@ -78,6 +86,9 @@ app.post("/api/review", async (request, response) => {
     });
   } catch (error) {
     console.error("Review failed:", error);
+    if (error.message.includes("Qwen API key")) {
+      return response.status(503).json({ error: error.message });
+    }
     const status = error.message.includes("policy") || error.message.includes("reviewers") ? 400 : 500;
     return response.status(status).json({ error: status === 400 ? error.message : "The review could not be completed. Please try again." });
   }
@@ -140,6 +151,9 @@ app.post("/api/review-mr", async (request, response) => {
     return response.json(result);
   } catch (error) {
     console.error("Merge request review failed:", error);
+    if (error.message.includes("Qwen API key")) {
+      return response.status(503).json({ error: error.message });
+    }
     const expected = ["valid GitLab", "URLs must", "Use a GitLab", "denied access", "not found", "no reviewable", "too large", "GitLab returned", "policy", "reviewers"];
     const status = expected.some((text) => error.message.includes(text)) ? 400 : 500;
     return response.status(status).json({ error: status === 400 ? error.message : "The merge request review could not be completed." });

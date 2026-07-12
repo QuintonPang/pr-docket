@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 
 const MODEL = "qwen-plus";
+const LLM_TIMEOUT_MS = 20_000;
 const JSON_RULE = `Return ONLY a valid JSON object with exactly this shape:
 {"verdict":"approve"|"request changes"|"comment","severity":1-5,"issues":[{"title":"short issue title","file":"path/to/file or unknown","line_hint":"+12 or unknown","severity":1-5,"confidence":"high"|"medium"|"low","evidence":"specific diff evidence","recommendation":"specific fix"}]}
 Do not use markdown, code fences, a preamble, or fields outside this schema. Severity 5 is critical and 1 is informational. Only include issues directly evidenced by the supplied diff.`;
@@ -75,8 +76,43 @@ const fixSuggestionFallback = {
 
 function extractJson(content) {
   if (typeof content !== "string") throw new Error("Model response was empty");
-  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  return JSON.parse(cleaned);
+  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const extracted = extractFirstJsonObject(cleaned);
+    if (!extracted) throw new Error("Model response did not contain a JSON object");
+    return JSON.parse(extracted);
+  }
+}
+
+function extractFirstJsonObject(content) {
+  const start = content.indexOf("{");
+  if (start === -1) return "";
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < content.length; index += 1) {
+    const character = content[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (character === "{") depth += 1;
+    if (character === "}") depth -= 1;
+    if (depth === 0) return content.slice(start, index + 1);
+  }
+  return "";
 }
 
 function normalizeReviewer(value) {
@@ -203,20 +239,44 @@ function normalizeFixSuggestion(value) {
 }
 
 async function jsonCall(client, messages, normalize, fallback) {
+  let lastError = "";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const completion = await client.chat.completions.create({
-        model: MODEL,
-        messages,
-        response_format: { type: "json_object" },
-        temperature: 0.2,
-      });
+      const retryMessages = attempt === 0
+        ? messages
+        : [
+          ...messages,
+          {
+            role: "user",
+            content: `Your previous response could not be parsed as valid JSON (${lastError}). Retry now. Return exactly one valid JSON object and nothing else.`,
+          },
+        ];
+      const completion = await client.chat.completions.create(
+        {
+          model: MODEL,
+          messages: retryMessages,
+          response_format: { type: "json_object" },
+          max_tokens: 1800,
+          temperature: 0.2,
+        },
+        { timeout: LLM_TIMEOUT_MS },
+      );
       return normalize(extractJson(completion.choices[0]?.message?.content));
     } catch (error) {
+      if (isProviderConfigurationError(error)) {
+        throw new Error("Qwen API key was rejected by Alibaba Cloud. Check QWEN_API_KEY in server/.env and restart the backend.");
+      }
+      lastError = error.message;
       console.warn(`LLM attempt ${attempt + 1} failed:`, error.message);
     }
   }
   return fallback;
+}
+
+function isProviderConfigurationError(error) {
+  return error?.status === 401
+    || error?.code === "invalid_api_key"
+    || String(error?.message || "").toLowerCase().includes("incorrect api key");
 }
 
 export function createQwenClient(apiKey) {
@@ -234,8 +294,10 @@ function selectPersonas(reviewerKeys = DEFAULT_REVIEWER_KEYS) {
 export async function runReviewers(client, diff, policyText = "", reviewerKeys = DEFAULT_REVIEWER_KEYS) {
   const policySection = policyText ? `\n\nTeam review policy:\n${policyText}` : "";
   const activePersonas = selectPersonas(reviewerKeys);
+  console.log(`[llm] starting ${activePersonas.length} reviewer agent(s)`);
   return Promise.all(
     activePersonas.map(async (persona) => {
+      console.log(`[llm] reviewer:${persona.key} started`);
       const output = await jsonCall(
         client,
         [
@@ -245,14 +307,16 @@ export async function runReviewers(client, diff, policyText = "", reviewerKeys =
         normalizeReviewer,
         { ...reviewerFallback, issues: [...reviewerFallback.issues] },
       );
+      console.log(`[llm] reviewer:${persona.key} finished with ${output.verdict} severity ${output.severity}`);
       return { key: persona.key, ...output };
     }),
   );
 }
 
 export async function runJudge(client, reviewers) {
+  console.log("[llm] judge started");
   const system = `You are the presiding judge for a code review. Weigh the supplied specialist findings and produce the final verdict. A severity of 4 or 5 is blocking. Return ONLY valid JSON with exactly this shape: {"verdict":"merge"|"changes requested"|"needs discussion","rationale":"2-3 sentence explanation","reviewer_count":0,"blocking_count":0,"suggestion_count":0}. Do not use markdown or a preamble. Counts must reflect the supplied reviews.`;
-  return jsonCall(
+  const output = await jsonCall(
     client,
     [
       { role: "system", content: system },
@@ -261,12 +325,15 @@ export async function runJudge(client, reviewers) {
     (value) => normalizeJudge(value, reviewers),
     judgeFallback(reviewers),
   );
+  console.log(`[llm] judge finished with ${output.verdict}`);
+  return output;
 }
 
 export async function reconcileReviewers(client, reviewers) {
+  console.log("[llm] debate clerk started");
   const allowedKeys = reviewers.map((reviewer) => reviewer.key).join("|");
   const system = `You are the debate clerk for a multi-agent code review. Reconcile the supplied specialist findings before the judge sees them. Merge duplicate findings, remove findings not directly evidenced by the diff summaries, preserve serious blocking issues, and flag meaningful disagreements. Return ONLY valid JSON with exactly this shape: {"reviewers":[{"key":"${allowedKeys}","verdict":"approve"|"request changes"|"comment","severity":1-5,"issues":[{"title":"short issue title","file":"path/to/file or unknown","line_hint":"+12 or unknown","severity":1-5,"confidence":"high"|"medium"|"low","evidence":"specific diff evidence","recommendation":"specific fix"}]}],"debate":{"resolved_conflicts":["short note"],"removed_findings":["short note"],"summary":"1-2 sentence reconciliation summary"}}. Do not use markdown or a preamble.`;
-  return jsonCall(
+  const output = await jsonCall(
     client,
     [
       { role: "system", content: system },
@@ -275,6 +342,8 @@ export async function reconcileReviewers(client, reviewers) {
     (value) => normalizeDebate(value, reviewers),
     debateFallback(reviewers),
   );
+  console.log("[llm] debate clerk finished");
+  return output;
 }
 
 export async function suggestFixes(client, diff, reviewers) {
@@ -285,8 +354,9 @@ export async function suggestFixes(client, diff, reviewers) {
 
   if (!blockingIssues.length) return fixSuggestionFallback;
 
+  console.log("[llm] fix suggestions started");
   const system = `You are a senior engineer proposing safe remediation suggestions for blocking code-review findings. Generate suggestions only for issues directly evidenced by the supplied diff and findings. Do not claim a patch is guaranteed correct. Return ONLY valid JSON with exactly this shape: {"fix_suggestions":[{"title":"short fix title","file":"path/to/file or unknown","risk":"risk being fixed","suggested_patch":"unified diff snippet or code-level change suggestion","confidence":"high"|"medium"|"low"}]}. Do not use markdown fences, a preamble, or fields outside this schema.`;
-  return jsonCall(
+  const output = await jsonCall(
     client,
     [
       { role: "system", content: system },
@@ -295,6 +365,8 @@ export async function suggestFixes(client, diff, reviewers) {
     normalizeFixSuggestions,
     fixSuggestionFallback,
   );
+  console.log(`[llm] fix suggestions finished with ${output.fix_suggestions.length} suggestion(s)`);
+  return output;
 }
 
 const BATCH_CHARACTER_LIMIT = 30_000;
@@ -348,11 +420,14 @@ function dedupeIssues(issues) {
 
 export async function reviewDiffFiles(client, fileDiffs, policyText = "", reviewerKeys = DEFAULT_REVIEWER_KEYS) {
   const batches = batchDiffs(fileDiffs);
+  console.log(`[mr] reviewing ${fileDiffs.length} file diff(s) in ${batches.length} batch(es)`);
   const batchReviews = [];
-  for (const batch of batches) {
+  for (const [index, batch] of batches.entries()) {
     // Each batch still runs its three specialists in parallel, while batches stay
     // sequential to avoid multiplying API concurrency on a large merge request.
+    console.log(`[mr] batch ${index + 1}/${batches.length} started`);
     batchReviews.push(await runReviewers(client, batch, policyText, reviewerKeys));
+    console.log(`[mr] batch ${index + 1}/${batches.length} finished`);
   }
   const reviewers = aggregateReviews(batchReviews, reviewerKeys);
   const { reviewers: reconciledReviewers, debate } = await reconcileReviewers(client, reviewers);
