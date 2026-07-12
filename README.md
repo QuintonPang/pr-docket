@@ -2,6 +2,58 @@
 
 PR Docket is a stateless, multi-agent code review demo. Paste a small git diff or provide a GitLab merge request URL. Three Qwen-powered specialists review security, performance, and readability in parallel, then a fourth judge agent weighs their findings.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Client, curl, or GitLab MR URL] --> B[Express API on Alibaba Cloud ECS]
+    B --> C{Input type}
+    C -->|Pasted diff| D[Direct diff validation]
+    C -->|GitLab MR URL| E[GitLab diff fetcher]
+    D --> F[Policy and reviewer selection]
+    E --> F
+    F --> G[Qwen specialist reviewers]
+    G --> G1[Security]
+    G --> G2[Performance]
+    G --> G3[Readability]
+    G --> G4[Testing optional]
+    G --> G5[Cloud cost optional]
+    G1 --> H[Qwen debate clerk]
+    G2 --> H
+    G3 --> H
+    G4 --> H
+    G5 --> H
+    H --> I[Qwen judge agent]
+    I --> J[CI gate]
+    J --> K{Blocking findings?}
+    K -->|Yes| L[Qwen fix suggestions]
+    K -->|No| M[Structured response]
+    L --> M
+    M --> N[Optional GitLab MR comment]
+```
+
+### Request flow
+
+1. The API accepts either a pasted diff through `/api/review` or a GitLab merge request URL through `/api/review-mr`.
+2. GitLab MR reviews fetch changed files through the GitLab API, skip non-reviewable files, and batch large diffs.
+3. Optional team policy and custom reviewer selection are normalized before any Qwen call.
+4. Selected Qwen specialist reviewers produce structured, evidence-based findings.
+5. A Qwen debate clerk reconciles duplicates, removes weak claims, and summarizes conflicts.
+6. A Qwen judge agent decides whether the change can merge, needs discussion, or requires changes.
+7. The API returns structured JSON with reviewer findings, debate notes, judge verdict, CI gate status, and optional fix suggestions.
+8. For GitLab MRs, PR Docket can optionally post the review summary back to the merge request.
+
+### Qwen agents
+
+- `security`: injection, secrets, validation, auth, unsafe deserialization.
+- `performance`: N+1 queries, inefficient loops, missing caching, excessive allocations.
+- `readability`: naming, complexity, duplication, maintainability, missing docs.
+- `testing`: missing regression tests, weak assertions, brittle tests, untested edge cases.
+- `cloud_cost`: unbounded model/API usage, expensive polling, wasteful network/storage/compute patterns.
+- `debate clerk`: reconciles specialist findings before judging.
+- `judge`: produces the final merge decision.
+- `fix suggester`: proposes bounded remediation suggestions for blocking issues.
+
 ## Run locally
 
 Use Node.js 18 or newer. Start the API in one terminal:
@@ -39,9 +91,198 @@ Never commit the `.env` file. The server uses the official `openai` npm client w
 
 ## GitLab merge requests
 
-Public GitLab.com projects work without additional credentials. For private projects, create a GitLab project or personal access token with `read_api` scope and set `GITLAB_TOKEN` in `server/.env`. For a self-managed instance, set `GITLAB_URL` to its origin; submitted MR URLs are restricted to that origin to prevent arbitrary server-side requests.
+Public GitLab.com projects work without additional credentials. For private projects, create a GitLab project or personal access token with `read_api` scope and set `GITLAB_TOKEN` in `server/.env`. To post PR Docket results back to an MR, the token needs permission to create merge request notes, such as GitLab's `api` scope. For a self-managed instance, set `GITLAB_URL` to its origin; submitted MR URLs are restricted to that origin to prevent arbitrary server-to-server requests.
 
 The server uses GitLab's supported `GET /projects/:id/merge_requests/:iid/diffs` endpoint, groups files into bounded batches, aggregates each specialist's findings, and sends the combined three-reviewer result to the judge. GitLab and model context limits can cause very large or binary files to be skipped; the UI reports the reviewed and skipped file counts.
+
+## API demo
+
+Use the deployed ECS backend URL when judging the API. Replace `http://47.84.109.97` with another deployment host if needed.
+
+### Health check
+
+```bash
+curl http://47.84.109.97/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+### Readiness check
+
+```bash
+curl http://47.84.109.97/ready
+```
+
+Expected response when Qwen is configured:
+
+```json
+{"status":"ready"}
+```
+
+If `QWEN_API_KEY` is missing, the endpoint returns `503`:
+
+```json
+{"status":"not_ready","missing":["QWEN_API_KEY"]}
+```
+
+### Review a pasted diff
+
+```bash
+curl -X POST http://47.84.109.97/api/review \
+  -H "Content-Type: application/json" \
+  -d '{"diff":"diff --git a/routes/users.js b/routes/users.js\n--- a/routes/users.js\n+++ b/routes/users.js\n@@ -1,3 +1,4 @@\n+const users = await db.query(\"SELECT * FROM users WHERE name = \" + req.query.name);"}'
+```
+
+Response shape:
+
+```json
+{
+  "reviewers": [
+    {
+      "key": "security",
+      "verdict": "request changes",
+      "severity": 5,
+      "issues": [
+        {
+          "title": "SQL injection risk",
+          "file": "routes/users.js",
+          "line_hint": "+1",
+          "severity": 5,
+          "confidence": "high",
+          "evidence": "User input is concatenated into a SQL query.",
+          "recommendation": "Use parameterized queries instead of string concatenation."
+        }
+      ]
+    }
+  ],
+  "debate": {
+    "resolved_conflicts": [
+      "Security and readability both identified the unsafe SQL construction; preserved it as a blocking security finding."
+    ],
+    "removed_findings": [],
+    "summary": "The specialist findings were reconciled before the judge verdict."
+  },
+  "judge": {
+    "verdict": "changes requested",
+    "rationale": "The security finding is blocking because user input reaches SQL without parameterization.",
+    "reviewer_count": 3,
+    "blocking_count": 1,
+    "suggestion_count": 2
+  },
+  "ci": {
+    "passed": false,
+    "max_severity": 5,
+    "blocking_count": 1,
+    "exit_code": 1
+  },
+  "fix_suggestions": [
+    {
+      "title": "Use a parameterized SQL query",
+      "file": "routes/users.js",
+      "risk": "SQL injection through concatenated user input.",
+      "suggested_patch": "- const users = await db.query(\"SELECT * FROM users WHERE name = \" + req.query.name);\n+ const users = await db.query(\"SELECT * FROM users WHERE name = ?\", [req.query.name]);",
+      "confidence": "medium"
+    }
+  ]
+}
+```
+
+The `debate` object is produced by a reconciliation agent that merges duplicate findings, removes weak claims, and gives the judge a cleaner set of specialist opinions.
+
+The `ci` object makes the result usable as an automated quality gate. A reviewer severity of `4` or `5` fails the gate with `exit_code: 1`; lower severities pass with `exit_code: 0`.
+
+The `fix_suggestions` array is generated only when the CI gate fails. Suggestions are bounded, advisory, and should be reviewed by a human before applying.
+
+### Select custom reviewers
+
+By default, PR Docket runs `security`, `performance`, and `readability`. Requests can choose a custom reviewer set to control cost and focus the review.
+
+Available reviewers:
+
+- `security`
+- `performance`
+- `readability`
+- `testing`
+- `cloud_cost`
+
+```bash
+curl -X POST http://47.84.109.97/api/review \
+  -H "Content-Type: application/json" \
+  -d '{
+    "diff":"diff --git a/server/billing.js b/server/billing.js\n+await qwen.chat.completions.create(payload);",
+    "reviewers":["security","testing","cloud_cost"]
+  }'
+```
+
+The response includes the active reviewer keys:
+
+```json
+{"reviewer_keys":["security","testing","cloud_cost"]}
+```
+
+### Apply a team review policy
+
+Both `/api/review` and `/api/review-mr` accept an optional `policy` object. The policy is injected into the Qwen reviewer prompts so teams can enforce project-specific expectations.
+
+```bash
+curl -X POST http://47.84.109.97/api/review \
+  -H "Content-Type: application/json" \
+  -d '{
+    "diff":"diff --git a/server/auth.js b/server/auth.js\n+console.log(process.env.SECRET_KEY);",
+    "policy":{
+      "require_tests_for":["server/","src/api/"],
+      "forbidden_patterns":[
+        {"name":"Hardcoded secret","pattern":"sk-","severity":5},
+        {"name":"Production console logging","pattern":"console.log","severity":2}
+      ],
+      "extra_instructions":[
+        "Flag missing authorization checks on admin or billing routes.",
+        "Prefer actionable findings with file and line evidence."
+      ]
+    }
+  }'
+```
+
+The response includes whether a policy was applied:
+
+```json
+{"policy_applied":true}
+```
+
+See `.prdocket.example.yml` for a repo-level policy example. The current API accepts the policy as JSON so deployments do not need a YAML parser dependency.
+
+### Review a GitLab merge request
+
+```bash
+curl -X POST http://47.84.109.97/api/review-mr \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://gitlab.com/group/project/-/merge_requests/42"}'
+```
+
+Public GitLab.com merge requests can be reviewed without a token. Private projects require `GITLAB_TOKEN` on the server.
+
+To post the Qwen judge summary back to the merge request, set `post_comment` to `true` and provide a GitLab token with note/comment permission:
+
+```bash
+curl -X POST http://47.84.109.97/api/review-mr \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://gitlab.com/group/project/-/merge_requests/42","post_comment":true}'
+```
+
+Comment posting is best-effort. If GitLab rejects the note because the token is missing or lacks permission, the API still returns the review and includes:
+
+```json
+{
+  "gitlab_comment": {
+    "posted_to_gitlab": false,
+    "error": "GITLAB_TOKEN is required to post a merge request comment."
+  }
+}
+```
 
 ## Scope
 

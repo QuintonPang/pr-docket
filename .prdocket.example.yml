@@ -1,0 +1,14 @@
+review:
+  require_tests_for:
+    - server/
+    - src/api/
+  forbidden_patterns:
+    - name: Hardcoded secret
+      pattern: sk-
+      severity: 5
+    - name: Console logging in production path
+      pattern: console.log
+      severity: 2
+  extra_instructions:
+    - Flag missing authorization checks on admin or billing routes.
+    - Prefer actionable findings with file and line evidence.

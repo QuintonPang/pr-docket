@@ -2,8 +2,8 @@ import OpenAI from "openai";
 
 const MODEL = "qwen-plus";
 const JSON_RULE = `Return ONLY a valid JSON object with exactly this shape:
-{"verdict":"approve"|"request changes"|"comment","severity":1-5,"issues":["short issue description"]}
-Do not use markdown, code fences, a preamble, or fields outside this schema. Severity 5 is critical and 1 is informational.`;
+{"verdict":"approve"|"request changes"|"comment","severity":1-5,"issues":[{"title":"short issue title","file":"path/to/file or unknown","line_hint":"+12 or unknown","severity":1-5,"confidence":"high"|"medium"|"low","evidence":"specific diff evidence","recommendation":"specific fix"}]}
+Do not use markdown, code fences, a preamble, or fields outside this schema. Severity 5 is critical and 1 is informational. Only include issues directly evidenced by the supplied diff.`;
 
 export const personas = [
   {
@@ -21,12 +21,32 @@ export const personas = [
     name: "Readability Counsel",
     system: `You are a readability and maintainability code reviewer. Inspect the supplied git diff for unclear naming, excessive complexity, missing documentation or tests, duplication, and unclear logic. Be precise, practical, and only report issues evidenced by the diff. ${JSON_RULE}`,
   },
+  {
+    key: "testing",
+    name: "Testing Counsel",
+    system: `You are a testing-focused code reviewer. Inspect the supplied git diff for missing test coverage, weak assertions, brittle tests, untested edge cases, and changes that should include regression tests. Be precise, practical, and only report issues evidenced by the diff. ${JSON_RULE}`,
+  },
+  {
+    key: "cloud_cost",
+    name: "Cloud Cost Counsel",
+    system: `You are a cloud cost and operations reviewer. Inspect the supplied git diff for wasteful network calls, unbounded model/API usage, expensive polling, missing limits, inefficient storage or compute use, and deployment choices that could increase cloud bills. Be precise, practical, and only report issues evidenced by the diff. ${JSON_RULE}`,
+  },
 ];
+
+export const DEFAULT_REVIEWER_KEYS = ["security", "performance", "readability"];
 
 const reviewerFallback = {
   verdict: "comment",
   severity: 1,
-  issues: ["The reviewer returned an unreadable response; manual review is recommended."],
+  issues: [{
+    title: "Unreadable reviewer response",
+    file: "unknown",
+    line_hint: "unknown",
+    severity: 1,
+    confidence: "low",
+    evidence: "The reviewer returned an unreadable response.",
+    recommendation: "Run a manual review or retry the request.",
+  }],
 };
 
 const judgeFallback = (reviewers) => {
@@ -34,10 +54,23 @@ const judgeFallback = (reviewers) => {
   return {
     verdict: blockingCount ? "changes requested" : "needs discussion",
     rationale: "The judge returned an unreadable response. The docket has preserved the specialist findings so they can be assessed manually.",
-    reviewer_count: 3,
+    reviewer_count: reviewers.length,
     blocking_count: blockingCount,
     suggestion_count: reviewers.length - blockingCount,
   };
+};
+
+const debateFallback = (reviewers) => ({
+  reviewers,
+  debate: {
+    resolved_conflicts: [],
+    removed_findings: [],
+    summary: "The reconciliation agent could not refine the specialist findings, so the original reviewer output was preserved.",
+  },
+});
+
+const fixSuggestionFallback = {
+  fix_suggestions: [],
 };
 
 function extractJson(content) {
@@ -58,7 +91,42 @@ function normalizeReviewer(value) {
   return {
     verdict: value.verdict,
     severity,
-    issues: value.issues.map(String).filter(Boolean).slice(0, 10),
+    issues: value.issues.map(normalizeIssue).filter(Boolean).slice(0, 10),
+  };
+}
+
+function normalizeIssue(value) {
+  if (typeof value === "string") {
+    const title = value.trim();
+    if (!title) return null;
+    return {
+      title,
+      file: "unknown",
+      line_hint: "unknown",
+      severity: 1,
+      confidence: "low",
+      evidence: title,
+      recommendation: "Review this finding manually.",
+    };
+  }
+
+  if (!value || typeof value !== "object") return null;
+  const title = String(value.title || "").trim();
+  const evidence = String(value.evidence || "").trim();
+  const recommendation = String(value.recommendation || "").trim();
+  if (!title || !evidence || !recommendation) return null;
+
+  const severity = Number(value.severity);
+  const confidence = ["high", "medium", "low"].includes(value.confidence) ? value.confidence : "medium";
+
+  return {
+    title,
+    file: String(value.file || "unknown").trim() || "unknown",
+    line_hint: String(value.line_hint || "unknown").trim() || "unknown",
+    severity: Number.isInteger(severity) && severity >= 1 && severity <= 5 ? severity : 1,
+    confidence,
+    evidence,
+    recommendation,
   };
 }
 
@@ -71,9 +139,66 @@ function normalizeJudge(value, reviewers) {
   return {
     verdict: value.verdict,
     rationale: value.rationale.trim(),
-    reviewer_count: 3,
+    reviewer_count: reviewers.length,
     blocking_count: blockingCount,
     suggestion_count: reviewers.length - blockingCount,
+  };
+}
+
+function normalizeDebate(value, originalReviewers) {
+  if (!value || !Array.isArray(value.reviewers) || !value.debate || typeof value.debate !== "object") {
+    throw new Error("Debate response did not match the schema");
+  }
+
+  const reviewerKeys = originalReviewers.map((reviewer) => reviewer.key);
+  const reviewersByKey = new Map(originalReviewers.map((reviewer) => [reviewer.key, reviewer]));
+  const reviewers = reviewerKeys.map((key) => {
+    const source = value.reviewers.find((reviewer) => reviewer?.key === key);
+    if (!source) return reviewersByKey.get(key);
+    const normalized = normalizeReviewer(source);
+    return { key, ...normalized };
+  });
+
+  return {
+    reviewers,
+    debate: {
+      resolved_conflicts: normalizeTextArray(value.debate.resolved_conflicts).slice(0, 10),
+      removed_findings: normalizeTextArray(value.debate.removed_findings).slice(0, 10),
+      summary: String(value.debate.summary || "Specialist findings were reconciled before judging.").trim(),
+    },
+  };
+}
+
+function normalizeTextArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function normalizeFixSuggestions(value) {
+  if (!value || !Array.isArray(value.fix_suggestions)) {
+    throw new Error("Fix suggestion response did not match the schema");
+  }
+
+  return {
+    fix_suggestions: value.fix_suggestions.map(normalizeFixSuggestion).filter(Boolean).slice(0, 5),
+  };
+}
+
+function normalizeFixSuggestion(value) {
+  if (!value || typeof value !== "object") return null;
+  const title = String(value.title || "").trim();
+  const file = String(value.file || "unknown").trim() || "unknown";
+  const risk = String(value.risk || "").trim();
+  const suggestedPatch = String(value.suggested_patch || "").trim();
+  const confidence = ["high", "medium", "low"].includes(value.confidence) ? value.confidence : "medium";
+
+  if (!title || !risk || !suggestedPatch) return null;
+  return {
+    title,
+    file,
+    risk,
+    suggested_patch: suggestedPatch,
+    confidence,
   };
 }
 
@@ -101,14 +226,21 @@ export function createQwenClient(apiKey) {
   });
 }
 
-export async function runReviewers(client, diff) {
+function selectPersonas(reviewerKeys = DEFAULT_REVIEWER_KEYS) {
+  const requested = new Set(reviewerKeys);
+  return personas.filter((persona) => requested.has(persona.key));
+}
+
+export async function runReviewers(client, diff, policyText = "", reviewerKeys = DEFAULT_REVIEWER_KEYS) {
+  const policySection = policyText ? `\n\nTeam review policy:\n${policyText}` : "";
+  const activePersonas = selectPersonas(reviewerKeys);
   return Promise.all(
-    personas.map(async (persona) => {
+    activePersonas.map(async (persona) => {
       const output = await jsonCall(
         client,
         [
           { role: "system", content: persona.system },
-          { role: "user", content: `Review this git diff:\n\n${diff}` },
+          { role: "user", content: `Review this git diff:${policySection}\n\n${diff}` },
         ],
         normalizeReviewer,
         { ...reviewerFallback, issues: [...reviewerFallback.issues] },
@@ -119,7 +251,7 @@ export async function runReviewers(client, diff) {
 }
 
 export async function runJudge(client, reviewers) {
-  const system = `You are the presiding judge for a code review. Weigh three specialist findings and produce the final verdict. A severity of 4 or 5 is blocking. Return ONLY valid JSON with exactly this shape: {"verdict":"merge"|"changes requested"|"needs discussion","rationale":"2-3 sentence explanation","reviewer_count":3,"blocking_count":0,"suggestion_count":3}. Do not use markdown or a preamble. Counts must reflect the supplied reviews.`;
+  const system = `You are the presiding judge for a code review. Weigh the supplied specialist findings and produce the final verdict. A severity of 4 or 5 is blocking. Return ONLY valid JSON with exactly this shape: {"verdict":"merge"|"changes requested"|"needs discussion","rationale":"2-3 sentence explanation","reviewer_count":0,"blocking_count":0,"suggestion_count":0}. Do not use markdown or a preamble. Counts must reflect the supplied reviews.`;
   return jsonCall(
     client,
     [
@@ -128,6 +260,40 @@ export async function runJudge(client, reviewers) {
     ],
     (value) => normalizeJudge(value, reviewers),
     judgeFallback(reviewers),
+  );
+}
+
+export async function reconcileReviewers(client, reviewers) {
+  const allowedKeys = reviewers.map((reviewer) => reviewer.key).join("|");
+  const system = `You are the debate clerk for a multi-agent code review. Reconcile the supplied specialist findings before the judge sees them. Merge duplicate findings, remove findings not directly evidenced by the diff summaries, preserve serious blocking issues, and flag meaningful disagreements. Return ONLY valid JSON with exactly this shape: {"reviewers":[{"key":"${allowedKeys}","verdict":"approve"|"request changes"|"comment","severity":1-5,"issues":[{"title":"short issue title","file":"path/to/file or unknown","line_hint":"+12 or unknown","severity":1-5,"confidence":"high"|"medium"|"low","evidence":"specific diff evidence","recommendation":"specific fix"}]}],"debate":{"resolved_conflicts":["short note"],"removed_findings":["short note"],"summary":"1-2 sentence reconciliation summary"}}. Do not use markdown or a preamble.`;
+  return jsonCall(
+    client,
+    [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(reviewers) },
+    ],
+    (value) => normalizeDebate(value, reviewers),
+    debateFallback(reviewers),
+  );
+}
+
+export async function suggestFixes(client, diff, reviewers) {
+  const blockingIssues = reviewers
+    .flatMap((reviewer) => reviewer.issues.map((issue) => ({ reviewer: reviewer.key, issue })))
+    .filter(({ issue }) => Number(issue.severity) >= 4)
+    .slice(0, 5);
+
+  if (!blockingIssues.length) return fixSuggestionFallback;
+
+  const system = `You are a senior engineer proposing safe remediation suggestions for blocking code-review findings. Generate suggestions only for issues directly evidenced by the supplied diff and findings. Do not claim a patch is guaranteed correct. Return ONLY valid JSON with exactly this shape: {"fix_suggestions":[{"title":"short fix title","file":"path/to/file or unknown","risk":"risk being fixed","suggested_patch":"unified diff snippet or code-level change suggestion","confidence":"high"|"medium"|"low"}]}. Do not use markdown fences, a preamble, or fields outside this schema.`;
+  return jsonCall(
+    client,
+    [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify({ blocking_issues: blockingIssues, diff: diff.slice(0, 20_000) }) },
+    ],
+    normalizeFixSuggestions,
+    fixSuggestionFallback,
   );
 }
 
@@ -153,11 +319,11 @@ export function batchDiffs(fileDiffs, limit = BATCH_CHARACTER_LIMIT) {
   return batches;
 }
 
-function aggregateReviews(batchReviews) {
-  return personas.map(({ key }) => {
+function aggregateReviews(batchReviews, reviewerKeys = DEFAULT_REVIEWER_KEYS) {
+  return reviewerKeys.map((key) => {
     const reviews = batchReviews.map((batch) => batch.find((review) => review.key === key));
     const severity = Math.max(...reviews.map((review) => review.severity));
-    const issues = [...new Set(reviews.flatMap((review) => review.issues))].slice(0, 15);
+    const issues = dedupeIssues(reviews.flatMap((review) => review.issues)).slice(0, 15);
     const verdict = severity >= 4
       ? "request changes"
       : reviews.some((review) => review.verdict !== "approve") ? "comment" : "approve";
@@ -165,15 +331,31 @@ function aggregateReviews(batchReviews) {
   });
 }
 
-export async function reviewDiffFiles(client, fileDiffs) {
+function dedupeIssues(issues) {
+  const seen = new Set();
+  return issues.filter((issue) => {
+    const key = [
+      issue.file,
+      issue.line_hint,
+      issue.title.toLowerCase(),
+      issue.evidence.toLowerCase(),
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export async function reviewDiffFiles(client, fileDiffs, policyText = "", reviewerKeys = DEFAULT_REVIEWER_KEYS) {
   const batches = batchDiffs(fileDiffs);
   const batchReviews = [];
   for (const batch of batches) {
     // Each batch still runs its three specialists in parallel, while batches stay
     // sequential to avoid multiplying API concurrency on a large merge request.
-    batchReviews.push(await runReviewers(client, batch));
+    batchReviews.push(await runReviewers(client, batch, policyText, reviewerKeys));
   }
-  const reviewers = aggregateReviews(batchReviews);
-  const judge = await runJudge(client, reviewers);
-  return { reviewers, judge, batch_count: batches.length };
+  const reviewers = aggregateReviews(batchReviews, reviewerKeys);
+  const { reviewers: reconciledReviewers, debate } = await reconcileReviewers(client, reviewers);
+  const judge = await runJudge(client, reconciledReviewers);
+  return { reviewers: reconciledReviewers, debate, judge, batch_count: batches.length };
 }

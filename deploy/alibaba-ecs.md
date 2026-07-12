@@ -19,7 +19,7 @@ docker --version
 ## 3. Clone and configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/pr-docket.git
+git clone https://github.com/QuintonPang/pr-docket.git
 cd pr-docket/server
 cp .env.example .env
 nano .env
@@ -54,6 +54,7 @@ docker run -d \
 ```bash
 curl http://localhost/health
 docker ps
+docker inspect --format='{{json .State.Health}}' pr-docket-api
 docker logs pr-docket-api
 ```
 

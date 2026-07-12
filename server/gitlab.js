@@ -18,9 +18,16 @@ export function parseMergeRequestUrl(value, configuredBaseUrl = DEFAULT_GITLAB_U
   return { projectPath: decodeURIComponent(match[1]), iid: Number(match[2]), baseUrl: baseUrl.origin };
 }
 
-async function gitlabRequest(url, token) {
+async function gitlabRequest(url, token, options = {}) {
   const headers = token ? { "PRIVATE-TOKEN": token } : {};
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...headers,
+      ...options.headers,
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
   if (!response.ok) {
     if ([401, 403].includes(response.status)) throw new Error("GitLab denied access. Check GITLAB_TOKEN for this project.");
     if (response.status === 404) throw new Error("The merge request was not found or is not accessible.");
@@ -60,5 +67,24 @@ export async function fetchMergeRequest(mrUrl, options = {}) {
     file_count: files.length,
     reviewed_file_count: diffs.length,
     skipped_file_count: files.length - diffs.length,
+  };
+}
+
+export async function postMergeRequestNote(mrUrl, body, options = {}) {
+  if (!options.token) throw new Error("GITLAB_TOKEN is required to post a merge request comment.");
+  if (typeof body !== "string" || !body.trim()) throw new Error("A non-empty comment body is required.");
+
+  const parsed = parseMergeRequestUrl(mrUrl, options.baseUrl);
+  const apiRoot = `${parsed.baseUrl}/api/v4/projects/${encodeURIComponent(parsed.projectPath)}/merge_requests/${parsed.iid}`;
+  const note = await gitlabRequest(`${apiRoot}/notes`, options.token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+
+  return {
+    posted_to_gitlab: true,
+    comment_url: note.web_url || null,
+    note_id: note.id,
   };
 }

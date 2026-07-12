@@ -24,10 +24,25 @@ const meta = {
   security: { icon: "§", name: "Security Counsel" },
   performance: { icon: "⌁", name: "Performance Counsel" },
   readability: { icon: "¶", name: "Readability Counsel" },
+  testing: { icon: "✓", name: "Testing Counsel" },
+  cloud_cost: { icon: "$", name: "Cloud Cost Counsel" },
 };
 
 function label(value) {
   return value.replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function IssueItem({ issue }) {
+  if (typeof issue === "string") return <li>{issue}</li>;
+
+  return (
+    <li>
+      <strong>{issue.title}</strong>
+      <span> {issue.file || "unknown"}:{issue.line_hint || "unknown"} · severity {issue.severity || "?"} · {issue.confidence || "medium"} confidence</span>
+      <p>{issue.evidence}</p>
+      <p>{issue.recommendation}</p>
+    </li>
+  );
 }
 
 function ReviewerCard({ reviewer, index }) {
@@ -43,8 +58,41 @@ function ReviewerCard({ reviewer, index }) {
         <span className="severity">Severity {reviewer.severity}/5</span>
       </div>
       {reviewer.issues.length
-        ? <ul>{reviewer.issues.map((issue, itemIndex) => <li key={itemIndex}>{issue}</li>)}</ul>
+        ? <ul>{reviewer.issues.map((issue, itemIndex) => <IssueItem key={itemIndex} issue={issue} />)}</ul>
         : <p className="clear-note">No issues entered into the docket.</p>}
+    </article>
+  );
+}
+
+function DebateCard({ debate }) {
+  if (!debate) return null;
+
+  return (
+    <article className="judge-card">
+      <div className="judge-heading"><div className="gavel" aria-hidden="true">↔</div><div><p className="eyebrow">Debate clerk</p><h2>Findings reconciled</h2></div></div>
+      <p className="rationale">{debate.summary}</p>
+      {(debate.resolved_conflicts?.length > 0 || debate.removed_findings?.length > 0) && <dl>
+        <div><dt>Resolved</dt><dd>{debate.resolved_conflicts?.length || 0}</dd></div>
+        <div><dt>Removed</dt><dd>{debate.removed_findings?.length || 0}</dd></div>
+      </dl>}
+    </article>
+  );
+}
+
+function FixSuggestions({ suggestions }) {
+  if (!suggestions?.length) return null;
+
+  return (
+    <article className="judge-card">
+      <div className="judge-heading"><div className="gavel" aria-hidden="true">✓</div><div><p className="eyebrow">Remediation</p><h2>Suggested fixes</h2></div></div>
+      <ul>
+        {suggestions.map((suggestion, index) => <li key={index}>
+          <strong>{suggestion.title}</strong>
+          <span> {suggestion.file || "unknown"} · {suggestion.confidence || "medium"} confidence</span>
+          <p>{suggestion.risk}</p>
+          <pre>{suggestion.suggested_patch}</pre>
+        </li>)}
+      </ul>
     </article>
   );
 }
@@ -135,6 +183,7 @@ function App() {
         <div className="reviewer-grid">
           {result.reviewers.map((reviewer, index) => <ReviewerCard key={reviewer.key} reviewer={reviewer} index={index} />)}
         </div>
+        <DebateCard debate={result.debate} />
         <article className="judge-card">
           <div className="judge-heading"><div className="gavel" aria-hidden="true">⚖</div><div><p className="eyebrow">Presiding agent</p><h2>Judge’s verdict</h2></div></div>
           <span className="judge-verdict">{label(result.judge.verdict)}</span>
@@ -145,6 +194,7 @@ function App() {
             <div><dt>Suggestions</dt><dd>{result.judge.suggestion_count}</dd></div>
           </dl>
         </article>
+        <FixSuggestions suggestions={result.fix_suggestions} />
       </section>}
     </main>
   );
