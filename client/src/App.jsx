@@ -42,6 +42,7 @@ const strictPolicy = {
     "Prefer findings with file and line evidence.",
   ],
 };
+const strictPolicyPreset = JSON.stringify(strictPolicy, null, 2);
 
 function label(value) {
   return value.replace(/\b\w/g, (character) => character.toUpperCase());
@@ -136,6 +137,7 @@ function App() {
   const [mrUrl, setMrUrl] = useState("");
   const [selectedReviewers, setSelectedReviewers] = useState(defaultReviewers);
   const [useStrictPolicy, setUseStrictPolicy] = useState(true);
+  const [policyText, setPolicyText] = useState(strictPolicyPreset);
   const [postComment, setPostComment] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -160,13 +162,21 @@ function App() {
     if (mode === "diff" && !diff.trim()) return setError("Paste a git diff before convening the review.");
     if (mode === "mr" && !mrUrl.trim()) return setError("Enter a GitLab merge request URL before convening the review.");
     if (!selectedReviewers.length) return setError("Select at least one reviewer before convening the review.");
+    let customPolicy = null;
+    if (useStrictPolicy) {
+      try {
+        customPolicy = JSON.parse(policyText);
+      } catch {
+        return setError("Strict team policy must be valid JSON before convening the review.");
+      }
+    }
     setLoading(true);
     setError("");
     setResult(null);
     try {
       const commonPayload = {
         reviewers: selectedReviewers,
-        ...(useStrictPolicy ? { policy: strictPolicy } : {}),
+        ...(useStrictPolicy ? { policy: customPolicy } : {}),
       };
       const payload = mode === "diff"
         ? { diff, ...commonPayload }
@@ -234,6 +244,29 @@ function App() {
               Post GitLab comment
             </label>}
           </div>
+          {useStrictPolicy && <div className="policy-editor">
+            <div className="policy-editor-heading">
+              <label htmlFor="strict-policy">Team policy JSON</label>
+              <button type="button" className="ghost-button" onClick={() => {
+                setPolicyText(strictPolicyPreset);
+                setError("");
+              }}>Reset preset</button>
+            </div>
+            <textarea
+              id="strict-policy"
+              value={policyText}
+              onChange={(event) => {
+                setPolicyText(event.target.value);
+                setResult(null);
+                setError("");
+              }}
+              spellCheck="false"
+              aria-describedby="strict-policy-help"
+            />
+            <p id="strict-policy-help">
+              Edit the rules the agents must follow. Use JSON with require_tests_for, forbidden_patterns, and extra_instructions.
+            </p>
+          </div>}
         </fieldset>
         <div className="form-footer">
           <span>{mode === "diff" ? `${diff.split("\n").length} lines submitted` : "GitLab API submission"}</span>

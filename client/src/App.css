@@ -25,6 +25,13 @@ textarea:focus { border-color: #776a59; box-shadow: 0 0 0 2px rgba(119,106,89,.1
 .reviewer-options label span { width: 23px; height: 23px; display: grid; place-items: center; border: 1px solid currentColor; font-size: 13px; flex: 0 0 auto; }
 .reviewer-options input,.review-toggles input { accent-color: #413a33; }
 .review-toggles { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px; color: #62594f; }
+.policy-editor { margin-top: 16px; border-top: 1px solid #c7baa6; padding-top: 16px; }
+.policy-editor-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.policy-editor-heading label { margin: 0; }
+.policy-editor textarea { min-height: 220px; background: #fbf8f0; }
+.policy-editor p { margin: 10px 0 0; color: #796d5f; font-size: 15px; line-height: 1.45; }
+.ghost-button { background: transparent; color: #62594f; border-color: #b9ad9a; padding: 9px 12px; }
+.ghost-button:hover:not(:disabled) { background: #e2d8c4; color: #413a33; transform: none; }
 button { border: 1px solid #413a33; background: #413a33; color: #faf7ef; padding: 13px 21px; font: 500 12px "DM Mono", monospace; cursor: pointer; transition: background .2s, transform .2s; }button:hover:not(:disabled) { background: #5b5045; transform: translateY(-1px); }button:disabled { cursor: wait; opacity: .55; }
 .error { border-left: 4px solid #b65445; background: #f5ded6; padding: 16px 18px; margin-top: 22px; font-size: 17px; }
 .results { padding-top: 64px; }.section-heading { border-bottom: 1px solid #b9ad9a; margin-bottom: 22px; }.section-heading h2 { font-size: 34px; }
